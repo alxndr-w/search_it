@@ -20,8 +20,6 @@ class search_it
     private $hashMe = '';
     private $clang = false;
     private $ellipsis;
-    private $tablePrefix;
-    private $tempTablePrefix;
     private $urlAddOnTableName;
     private $significantCharacterCount = 3;
     private $stopwords = [];
@@ -106,8 +104,6 @@ class search_it
         }
 
         $this->setClang($_clang);
-        $this->tablePrefix = rex::getTablePrefix();
-        $this->tempTablePrefix = rex::getTablePrefix().rex::getTempPrefix();
         $this->urlAddOnTableName = search_it_getUrlAddOnTableName();
 
         $this->ellipsis = rex_i18n::msg('search_it_ellipsis');
@@ -119,8 +115,21 @@ class search_it
         }
     }
 
+    private static function getTablePrefix() {
+        static $tablePrefix = null;
+        if($tablePrefix == null) {
+            $tablePrefix = rex::getTablePrefix();
+        }
+        return $tablePrefix;
+    }
 
-
+    private static function getTempTablePrefix() {
+        static $tempTablePrefix = null;
+        if($tempTablePrefix == null) {
+            $tempTablePrefix = rex::getTablePrefix().rex::getTempPrefix();
+        }
+        return $tempTablePrefix;
+    }
 
     /* indexing */
     /**
@@ -135,7 +144,7 @@ class search_it
 		// index articles
         $global_return = 0;
         $art_sql = rex_sql::factory();
-        $art_sql->setTable($this->tablePrefix . 'article');
+        $art_sql->setTable(self::getTablePrefix() . 'article');
         if ($art_sql->select('id,clang_id')) {
             foreach ($art_sql->getArray() as $art) {
                 $returns = $this->indexArticle($art['id'], $art['clang_id']);
@@ -149,9 +158,9 @@ class search_it
 		if(rex_addon::get('search_it')->getConfig('index_url_addon') && search_it_isUrlAddOnAvailable()) {
 			$url_sql = rex_sql::factory();
 			$url_sql->setTable($this->urlAddOnTableName);
-			if ($url_sql->select('id, article_id, clang_id, profile_id, data_id')) {
+			if ($url_sql->select('url_hash, article_id, clang_id, profile_id, data_id')) {
 				foreach ($url_sql->getArray() as $url) {
-					$returns = $this->indexUrl($url['id'], $url['article_id'], $url['clang_id'], $url['profile_id'], $url['data_id']);
+					$returns = $this->indexUrl($url['url_hash'], $url['article_id'], $url['clang_id'], $url['profile_id'], $url['data_id']);
 					foreach ( $returns as $return ) {
 						if ($return > 3 ) { $global_return += $return; }
 					}
@@ -169,7 +178,7 @@ class search_it
         // index mediapool
         if ($this->indexMediapool) {
             $mediaSQL = rex_sql::factory();
-            $mediaSQL->setTable($this->tablePrefix . 'media');
+            $mediaSQL->setTable(self::getTablePrefix() . 'media');
             if ($mediaSQL->select('id, category_id, filename')) {
                 foreach ($mediaSQL->getArray() as $file) {
                     $this->indexFile('media/' . $file['filename'], false, false, $file['id'], $file['category_id']);
@@ -217,22 +226,13 @@ class search_it
 
             //rex_clang::setCurrentId($langID);
             $delete = rex_sql::factory();
-            $where = sprintf("ftable = '%s' AND fid = %d AND clang = %d", $this->tablePrefix . 'article', $_id, $langID);
+            $where = sprintf("ftable = '%s' AND fid = %d AND clang = %d", self::getTablePrefix() . 'article', $_id, $langID);
 
-            // delete from cache
-            $select = rex_sql::factory();
-            $select->setTable($this->tempTablePrefix . 'search_it_index');
-            $select->setWhere($where);
-            $select->select('id');
-
-            $indexIds = [];
-            foreach ($select->getArray() as $result) {
-                $indexIds[] = $result['id'];
-            }
-            $this->deleteCache($indexIds);
+            // delete complete cache (see https://github.com/FriendsOfREDAXO/search_it/issues/284)
+            $this->deleteCache();
 
             // delete old
-            $delete->setTable($this->tempTablePrefix . 'search_it_index');
+            $delete->setTable(self::getTempTablePrefix() . 'search_it_index');
             $delete->setWhere($where);
             $delete->delete();
 
@@ -290,12 +290,12 @@ class search_it
                             if ( $response->isRedirection() ) {
                                 $return[$langID] = SEARCH_IT_ART_REDIRECT;
                                 $response_text = rex_i18n::msg('search_it_generate_article_redirect');
-                                rex_logger::factory()->log( 'Warning', rex_i18n::msg('search_it_generate_article_http_error') .' '. $scanurl . '<br>' . $response_text );
+                                rex_logger::factory()->log( 'Warning', rex_i18n::msg('search_it_generate_article_http_error') .' '. $scanurl . PHP_EOL . $response_text );
                             } else if ( $response->getStatusCode() == '404' ) {
                                 $return[$langID] = SEARCH_IT_ART_404;
-                                rex_logger::factory()->log( 'Warning', rex_i18n::msg('search_it_generate_article_404_error') .' '. $scanurl . '<br>' . $response_text );
+                                rex_logger::factory()->log( 'Warning', rex_i18n::msg('search_it_generate_article_404_error') .' '. $scanurl . PHP_EOL . $response_text );
                             } else {
-                                rex_logger::factory()->log( 'Warning', rex_i18n::msg('search_it_generate_article_http_error') .' '. $scanurl . '<br>' . $response_text );
+                                rex_logger::factory()->log( 'Warning', rex_i18n::msg('search_it_generate_article_http_error') .' '. $scanurl . PHP_EOL . $response_text );
                                 $return[$langID] = SEARCH_IT_ART_NOTOK;
                             }
                             continue;
@@ -303,7 +303,7 @@ class search_it
 
                  } catch (rex_socket_exception $e) {
                     $articleText = '';
-                    rex_logger::factory()->log( 'Warning', rex_i18n::msg('search_it_generate_article_socket_error') .' '.$scanurl. '<br>' .$e->getMessage() );
+                    rex_logger::factory()->error( rex_i18n::msg('search_it_generate_article_socket_error') .': '.$scanurl. PHP_EOL .$e->getMessage() );
                     $return[$langID] = SEARCH_IT_ART_ERROR;
                     continue;
 
@@ -325,7 +325,7 @@ class search_it
                 $articleData = [];
 
                 $articleData['texttype'] = 'article';
-                $articleData['ftable'] = $this->tablePrefix . 'article';
+                $articleData['ftable'] = self::getTablePrefix() . 'article';
                 $articleData['fcolumn'] = NULL;
                 $articleData['clang'] = $article->getClang();
                 $articleData['fid'] = intval($_id);
@@ -333,14 +333,15 @@ class search_it
                 $articleData['unchangedtext'] = $articleText;
                 $plaintext = $this->getPlaintext($articleText);
                 $articleData['plaintext'] = $plaintext;
+				$articleData['lastindexed'] =  date(DATE_W3C, time());
 
-                if (array_key_exists($this->tablePrefix . 'article', $this->includeColumns)) {
+                if (array_key_exists(self::getTablePrefix() . 'article', $this->includeColumns)) {
                     $additionalValues = [];
                     $select->flushValues();
-                    $select->setTable($this->tablePrefix . 'article');
+                    $select->setTable(self::getTablePrefix() . 'article');
                     $select->setWhere('id = ' . $_id . ' AND clang_id = ' . $langID);
-                    $select->select('`' . implode('`,`', $this->includeColumns[$this->tablePrefix . 'article']) . '`');
-                    foreach ($this->includeColumns[$this->tablePrefix . 'article'] as $col) {
+                    $select->select('`' . implode('`,`', $this->includeColumns[self::getTablePrefix() . 'article']) . '`');
+                    foreach ($this->includeColumns[self::getTablePrefix() . 'article'] as $col) {
                         if ( $select->hasValue($col) ) { $additionalValues[$col] = $select->getValue($col); }
                     }
 
@@ -355,7 +356,7 @@ class search_it
 
                 $articleData['teaser'] = $this->getTeaserText($plaintext);
 
-                $insert->setTable($this->tempTablePrefix . 'search_it_index');
+                $insert->setTable(self::getTempTablePrefix() . 'search_it_index');
                 $insert->setValues($articleData);
                 $insert->insert();
 
@@ -373,35 +374,27 @@ class search_it
     /**
      * Indexes a certain url from url Addon.
      *
-     * @param int $id url_generator_url table id
+     * @param int $url_hash url_generator_url table id
      * @param int $article_id redaxo article id
+     * @param int $clang_id redaxo clang id
      * @param int $profile_id url addon profile id
      * @param int $data_id url addon profile id
-     * @param int $clang_id redaxo clang id
      *
      * @return int
      */
-    public function indexURL($id, $article_id, $clang_id, $profile_id, $data_id)
+    public function indexURL($url_hash, $article_id, $clang_id, $profile_id, $data_id)
     {
         $return = [];
         $keywords = [];
 
 		$delete = rex_sql::factory();
-		$where = "ftable = '". $this->urlAddOnTableName ."' AND fid = ". $id ." AND clang = ". $clang_id;
-		// delete from cache
-		$select = rex_sql::factory();
-		$select->setTable($this->tempTablePrefix . 'search_it_index');
-		$select->setWhere($where);
-		$select->select('id');
+		$where = "ftable = '". $this->urlAddOnTableName ."' AND fid = '". $url_hash ."' ";
 
-		$indexIds = [];
-		foreach ($select->getArray() as $result) {
-			$indexIds[] = $result['id'];
-		}
-		$this->deleteCache($indexIds);
+		// delete complete cache (see https://github.com/FriendsOfREDAXO/search_it/issues/284)
+		$this->deleteCache();
 
 		// delete old
-		$delete->setTable($this->tempTablePrefix . 'search_it_index');
+		$delete->setTable(self::getTempTablePrefix() . 'search_it_index');
 		$delete->setWhere($where);
 		$delete->delete();
 
@@ -463,12 +456,12 @@ class search_it
 					if ( $response->isRedirection() ) {
 						$return[$clang_id] = SEARCH_IT_URL_REDIRECT;
 						$response_text = rex_i18n::msg('search_it_generate_article_redirect');
-						rex_logger::factory()->log( 'Warning', rex_i18n::msg('search_it_generate_article_http_error') .' '. $scanurl . '<br>' . $response_text );
+						rex_logger::factory()->log( 'Warning', rex_i18n::msg('search_it_generate_article_http_error') .' '. $scanurl . PHP_EOL . $response_text );
 					} else if ( $response->getStatusCode() == '404' ) {
 						$return[$clang_id] = SEARCH_IT_URL_404;
-						rex_logger::factory()->log( 'Warning', rex_i18n::msg('search_it_generate_article_404_error') .' '. $scanurl . '<br>' . $response_text );
+						rex_logger::factory()->log( 'Warning', rex_i18n::msg('search_it_generate_article_404_error') .' '. $scanurl . PHP_EOL . $response_text );
 					} else {
-						rex_logger::factory()->log( 'Warning', rex_i18n::msg('search_it_generate_article_http_error') .' '. $scanurl . '<br>' . $response_text );
+						rex_logger::factory()->log( 'Warning', rex_i18n::msg('search_it_generate_article_http_error') .' '. $scanurl . PHP_EOL . $response_text );
 						$return[$clang_id] = SEARCH_IT_URL_NOTOK;
 					}
 					return $return;
@@ -476,7 +469,7 @@ class search_it
 
 			} catch (rex_socket_exception $e) {
 				$articleText = '';
-				rex_logger::factory()->log( 'Warning', rex_i18n::msg('search_it_generate_article_socket_error') .' '.$scanurl. '<br>' .$e->getMessage() );
+				rex_logger::factory()->error( rex_i18n::msg('search_it_generate_article_socket_error') .' '.$scanurl. PHP_EOL .$e->getMessage() );
 				$return[$clang_id] = SEARCH_IT_URL_ERROR;
 			}
 			// regex time
@@ -496,17 +489,18 @@ class search_it
 			$articleData['ftable'] = $this->urlAddOnTableName;
 			$articleData['fcolumn'] = NULL;
 			$articleData['clang'] = $clang_id;
-			$articleData['fid'] = intval($id);
+			$articleData['fid'] = $url_hash;
 			$articleData['catid'] = $article->getCategoryId();
 			$articleData['unchangedtext'] = $articleText;
 			$plaintext = $this->getPlaintext($articleText);
 			$articleData['plaintext'] = $plaintext;
+			$articleData['lastindexed'] =  date(DATE_W3C, time());
 
 			if (array_key_exists($this->urlAddOnTableName, $this->includeColumns)) {
 				$additionalValues = [];
 				$select->flushValues();
 				$select->setTable($this->urlAddOnTableName);
-				$select->setWhere('id = ' . $id . ' AND clang_id = ' . $clang_id);
+				$select->setWhere('url_hash = "' . $url_hash . '"');
 				$select->select('`' . implode('`,`', $this->includeColumns[$this->urlAddOnTableName]) . '`');
 				foreach ($this->includeColumns[$this->urlAddOnTableName] as $col) {
 					if ( $select->hasValue($col) ) { $additionalValues[$col] = $select->getValue($col); }
@@ -522,7 +516,7 @@ class search_it
 			}
 
 			$articleData['teaser'] = $this->getTeaserText($plaintext);
-			$insert->setTable($this->tempTablePrefix . 'search_it_index');
+			$insert->setTable(self::getTempTablePrefix() . 'search_it_index');
 			$insert->setValues($articleData);
 			$insert->insert();
 
@@ -535,6 +529,57 @@ class search_it
         return $return;
     }
 
+    /**
+     * Compares index table with url addon table and adds new urls to index
+	 * @return string[] Array containing index results
+     */
+    public function indexNewURLs()
+    {
+        $global_return = 0;
+
+		// index url 2 addon URLs
+		if(rex_addon::get('search_it')->getConfig('index_url_addon') && search_it_isUrlAddOnAvailable()) {
+			$sql = rex_sql::factory();
+			$sql->setQuery("SELECT url.url_hash, url.article_id, url.clang_id, url.profile_id, url.data_id FROM `". search_it_getUrlAddOnTableName() ."` as url "
+				. "LEFT JOIN `". self::getTempTablePrefix() ."search_it_index` AS search_it ON url.url_hash = search_it.fid "
+				. "WHERE search_it.fid IS NULL;");
+
+			foreach ($sql->getArray() as $result) {
+				$returns = $this->indexUrl($result['url_hash'], $result['article_id'], $result['clang_id'], $result['profile_id'], $result['data_id']);
+				foreach ( $returns as $return ) {
+					if ($return > 3 ) { $global_return += $return; }
+				}
+			}
+		}
+		return $global_return;
+    }
+
+    /**
+     * Compares index table with url addon table and adds new urls to index
+	 * @return string[] Array containing index results
+     */
+    public function indexUpdatedURLs()
+    {
+        $global_return = 0;
+
+		// index url 2 addon URLs
+		if(rex_addon::get('search_it')->getConfig('index_url_addon') && search_it_isUrlAddOnAvailable()) {
+			$sql = rex_sql::factory();
+			$sql->setQuery("SELECT url.url_hash, url.article_id, url.clang_id, url.profile_id, url.data_id FROM `". search_it_getUrlAddOnTableName() ."` as url "
+				. "LEFT JOIN `". self::getTempTablePrefix() ."search_it_index` AS search_it ON url.url_hash = search_it.fid "
+				. "WHERE search_it.lastindexed < url.lastmod;");
+
+			foreach ($sql->getArray() as $result) {
+				$this->unindexURL($result['url_hash']);
+				$returns = $this->indexUrl($result['url_hash'], $result['article_id'], $result['clang_id'], $result['profile_id'], $result['data_id']);
+				foreach ( $returns as $return ) {
+					if ($return > 3 ) { $global_return += $return; }
+				}
+			}
+		}
+		return $global_return;
+    }
+
 	/**
      * Excludes an article from the index.
      *
@@ -545,7 +590,7 @@ class search_it
     {
         // exclude article
         $art_sql = rex_sql::factory();
-        $art_sql->setTable($this->tempTablePrefix . 'search_it_index');
+        $art_sql->setTable(self::getTempTablePrefix() . 'search_it_index');
 
         $where = "fid = " . intval($_id) . " AND texttype='article'";
         if ($_clang !== false) {
@@ -557,7 +602,7 @@ class search_it
 
         // delete from cache
         $select = rex_sql::factory();
-        $select->setTable($this->tempTablePrefix. 'search_it_index');
+        $select->setTable(self::getTempTablePrefix(). 'search_it_index');
         $select->setWhere($where);
         $select->select('id');
 
@@ -569,23 +614,54 @@ class search_it
     }
 
 	/**
+     * Compares index table with url table and excludes all deleted urls from the index.
+     */
+    public function unindexDeletedURLs()
+    {
+		if(!search_it_isUrlAddOnAvailable()) {
+			return;
+		}
+
+        $sql = rex_sql::factory();
+		$sql->setQuery("SELECT search_it.id FROM `". self::getTempTablePrefix() ."search_it_index` AS search_it "
+			. "LEFT JOIN `". search_it_getUrlAddOnTableName() ."` as url ON search_it.fid = url.url_hash "
+			. "WHERE texttype = 'url' AND url.id IS NULL;");
+
+		$unindexIds = [];
+        foreach ($sql->getArray() as $result) {
+            $unindexIds[] = $result['id'];
+        }
+
+		if(count($unindexIds) > 0) {
+			// delete from index
+			$delete = rex_sql::factory();
+			$delete->setTable(self::getTempTablePrefix() . 'search_it_index');
+			$delete->setWhere('id IN (' . implode(',', $unindexIds) . ')');
+			$delete->delete();
+
+			// delete from cache
+			$this->deleteCache($unindexIds);
+		}
+    }
+
+	/**
      * Excludes an url from the index.
      *
-     * @param int $_id
+     * @param int $url_hash
      */
-    public function unindexURL($_id)
+    public function unindexURL($url_hash)
     {
         // exclude url
         $art_sql = rex_sql::factory();
-        $art_sql->setTable($this->tempTablePrefix . 'search_it_index');
+        $art_sql->setTable(self::getTempTablePrefix() . 'search_it_index');
 
-        $where = "fid = " . intval($_id) . " AND texttype='url'";
+        $where = "fid = '" . $url_hash . "' AND texttype='url'";
         $art_sql->setWhere($where);
         $art_sql->delete();
 
         // delete from cache
         $select = rex_sql::factory();
-        $select->setTable($this->tempTablePrefix. 'search_it_index');
+        $select->setTable(self::getTempTablePrefix(). 'search_it_index');
         $select->setWhere($where);
         $select->select('id');
 
@@ -622,7 +698,7 @@ class search_it
             }
         }
         $delete = rex_sql::factory();
-        $delete->setTable($this->tempTablePrefix . 'search_it_index');
+        $delete->setTable(self::getTempTablePrefix() . 'search_it_index');
 
         $where = sprintf(" `ftable` = '%s' AND `fcolumn` = '%s' AND `texttype` = 'db_column'", $_table, $_column);
         if (is_string($_idcol) AND ($_id !== false)) {
@@ -630,16 +706,8 @@ class search_it
         }
         $delete->setWhere($where);
 
-        $cache = clone $delete;
-
-        // delete from cache
-        $indexIds = [];
-        if ($cache->select('id')) {
-            foreach ($cache->getArray() as $result) {
-                $indexIds[] = $result['id'];
-            }
-            $this->deleteCache($indexIds);
-        }
+		// delete complete cache (see https://github.com/FriendsOfREDAXO/search_it/issues/284)
+		$this->deleteCache();
 
         // delete from index
         if ( $_start === false || $_start == 0 ) { $delete->delete(); }
@@ -673,8 +741,8 @@ class search_it
             $keywords = [];
 
             foreach ($sql->getArray() as $row) {
-                if (!empty($row[$_column]) AND ( rex_addon::get('search_it')->getConfig('indexoffline') OR $this->tablePrefix . 'article' != $_table OR $row['status'] == '1')
-                    AND ($this->tablePrefix . 'article' != $_table OR !in_array($row['id'], $this->excludeIDs))
+                if (!empty($row[$_column]) AND ( rex_addon::get('search_it')->getConfig('indexoffline') OR self::getTablePrefix() . 'article' != $_table OR $row['status'] == '1')
+                    AND (self::getTablePrefix() . 'article' != $_table OR !in_array($row['id'], $this->excludeIDs))
                 ) {
                     $insert = rex_sql::factory();
                     $indexData = [];
@@ -691,7 +759,7 @@ class search_it
                     $indexData['fid'] = NULL;
                     if (is_string($_idcol) AND array_key_exists($_idcol, $row)) {
                         $indexData['fid'] = $row[$_idcol];
-                    } elseif ($_table == $this->tablePrefix . 'article') {
+                    } elseif ($_table == self::getTablePrefix() . 'article') {
                         $indexData['fid'] = $row['id'];
                     } elseif (count($primaryKeys) == 1) {
                         $indexData['fid'] = $row[$primaryKeys[0]];
@@ -709,7 +777,7 @@ class search_it
                     }
                     if (array_key_exists('parent_id', $row)) {
                         $indexData['catid'] = $row['parent_id'];
-                        if ($_table == $this->tablePrefix . 'article') {
+                        if ($_table == self::getTablePrefix() . 'article') {
                             $indexData['catid'] = intval($row['startarticle']) ? $row['id'] : $row['parent_id'];
                         }
                     } elseif (array_key_exists('category_id', $row)) {
@@ -726,6 +794,7 @@ class search_it
                     $indexData['unchangedtext'] = (string)$row[$_column];
                     $plaintext = $this->getPlaintext($row[$_column]);
                     $indexData['plaintext'] = $plaintext;
+					$indexData['lastindexed'] =  date(DATE_W3C, time());
 
                     foreach (preg_split('~[[:punct:][:space:]]+~ismu', $plaintext) as $keyword) {
                         if ($this->significantCharacterCount <= mb_strlen($keyword, 'UTF-8')) {
@@ -734,7 +803,7 @@ class search_it
                     }
 
                     $indexData['teaser'] = '';
-                    if ($this->tablePrefix . 'article' == $_table) {
+                    if (self::getTablePrefix() . 'article' == $_table) {
                         $rex_article = new rex_article_content(intval($row['id']), intval($row['clang_id']));
                         $teaser = true;
                         $article_content_file = rex_path::addonCache('structure', intval($row['id']) . '.' . intval($row['clang_id']) . '.content');
@@ -753,7 +822,7 @@ class search_it
                         $indexData['teaser'] = $teaser ? $this->getTeaserText($this->getPlaintext($rex_article->getArticle())) : '';
                     }
 
-                    $insert->setTable($this->tempTablePrefix . 'search_it_index');
+                    $insert->setTable(self::getTempTablePrefix() . 'search_it_index');
                     $insert->setValues($indexData);
                     $insert->insert();
 
@@ -807,20 +876,11 @@ class search_it
             $where .= sprintf(' AND catid = %d', $_catid);
         }
 
-        // delete from cache
-        $select = rex_sql::factory();
-        $select->setTable($this->tempTablePrefix . 'search_it_index');
-        $select->setWhere($where);
-        $indexIds = [];
-        if ($select->select('id')) {
-            foreach ($select->getArray() as $result) {
-                $indexIds[] = $result['id'];
-            }
-            $this->deleteCache($indexIds);
-        }
+		// delete complete cache (see https://github.com/FriendsOfREDAXO/search_it/issues/284)
+		$this->deleteCache();
 
         // delete old data
-        $delete->setTable($this->tempTablePrefix . 'search_it_index');
+        $delete->setTable(self::getTempTablePrefix() . 'search_it_index');
         $delete->setWhere($where);
         $delete->delete();
 
@@ -921,7 +981,7 @@ class search_it
 
         $fileData['texttype'] = 'file';
         if ($_fid !== false) {
-            $fileData['ftable'] = $this->tablePrefix . 'media';
+            $fileData['ftable'] = self::getTablePrefix() . 'media';
         }
         $fileData['filename'] = $_filename;
         $fileData['fileext'] = $fileext;
@@ -943,6 +1003,7 @@ class search_it
         }
         $fileData['unchangedtext'] = $text;
         $fileData['plaintext'] = $plaintext;
+		$fileData['lastindexed'] =  date(DATE_W3C, time());
 
         $keywords = [];
         foreach (preg_split('~[[:punct:][:space:]]+~ismu', $plaintext) as $keyword) {
@@ -954,7 +1015,7 @@ class search_it
 
         $fileData['teaser'] = $this->getTeaserText($plaintext);
 
-        $insert->setTable($this->tempTablePrefix . 'search_it_index');
+        $insert->setTable(self::getTempTablePrefix() . 'search_it_index');
         $insert->setValues($fileData);
         $insert->insert();
 
@@ -1026,7 +1087,7 @@ class search_it
     private static function getMinFID()
     {
         $minfid_sql = rex_sql::factory();
-        $minfid_result = $minfid_sql->getArray('SELECT MIN(CONVERT(fid, SIGNED)) as minfid FROM `' . self::tempTablePrefix.'search_it_index'. '`');
+        $minfid_result = $minfid_sql->getArray('SELECT MIN(CONVERT(fid, SIGNED)) as minfid FROM `' . self::getTempTablePrefix().'search_it_index'. '`');
         $minfid = intval($minfid_result[0]['minfid']);
 
         return ($minfid < 0) ? --$minfid : -1;
@@ -1035,7 +1096,7 @@ class search_it
     private static function getMaxFID($_table)
     {
         $maxfid_sql = rex_sql::factory();
-        $maxfid_result = $maxfid_sql->getArray('SELECT MAX(CONVERT(fid, SIGNED)) as maxfid FROM `' . self::tempTablePrefix.'search_it_index' . '` WHERE ftable = "'.$_table.'" ');
+        $maxfid_result = $maxfid_sql->getArray('SELECT MAX(CONVERT(fid, SIGNED)) as maxfid FROM `' . self::getTempTablePrefix().'search_it_index' . '` WHERE ftable = "'.$_table.'" ');
         $maxfid = intval($maxfid_result[0]['maxfid']);
 
         return ($maxfid > 0) ? ++$maxfid : 1;
@@ -1048,7 +1109,7 @@ class search_it
     public function deleteIndex()
     {
         $delete = rex_sql::factory();
-		$delete->setQuery('TRUNCATE '. $this->tempTablePrefix .'search_it_index');
+		$delete->setQuery('TRUNCATE '. self::getTempTablePrefix() .'search_it_index');
 
         $this->deleteCache();
     }
@@ -1060,13 +1121,13 @@ class search_it
     public function deleteIndexForType($texttype)
     {
         $sql = rex_sql::factory();
-		$query = 'SELECT id FROM '. $this->tempTablePrefix .'search_it_index WHERE texttype = "'. $texttype .'";';
+		$query = 'SELECT id FROM '. self::getTempTablePrefix() .'search_it_index WHERE texttype = "'. $texttype .'";';
 		$deleteIds = [];
         foreach ($sql->getArray($query) as $cacheId) {
 			$deleteIds[] = $cacheId['id'];
 		}
 		// Delete index
-		$sql->setQuery('DELETE FROM '. $this->tempTablePrefix .'search_it_index WHERE texttype = "'. $texttype .'"');
+		$sql->setQuery('DELETE FROM '. self::getTempTablePrefix() .'search_it_index WHERE texttype = "'. $texttype .'"');
 		// Delete cache
 		$this->deleteCache($deleteIds);
     }
@@ -1821,7 +1882,7 @@ class search_it
     private function isCached($_search)
     {
         $sql = rex_sql::factory();
-        $sql->setTable($this->tempTablePrefix . 'search_it_cache');
+        $sql->setTable(self::getTempTablePrefix() . 'search_it_cache');
         $sql->setWhere(sprintf("hash = '%s'", $this->cacheHash($_search)));
 
         if ($sql->select('returnarray')) {
@@ -1856,7 +1917,7 @@ class search_it
     private function cacheSearch($_result, $_indexIds)
     {
         $sql = rex_sql::factory();
-        $sql->setTable($this->tempTablePrefix . 'search_it_cache');
+        $sql->setTable(self::getTempTablePrefix() . 'search_it_cache');
         $sql->setValues(array(
                 'hash' => $this->cacheHash($this->searchString),
                 'returnarray' => $_result
@@ -1874,15 +1935,13 @@ class search_it
             $sql2 = rex_sql::factory();
 
             try {
-                $sqlResult = $sql2->setQuery(
+                $sql2->setQuery(
                     sprintf(
-                        'INSERT INTO `%s` (index_id,cache_id) VALUES
-            %s;',
-                        $this->tempTablePrefix . 'search_it_cacheindex_ids',
+                        'INSERT INTO `%s` (index_id,cache_id) VALUES %s;',
+                        self::getTempTablePrefix() . 'search_it_cacheindex_ids',
                         implode(',', $Ainsert)
                     )
                 );
-                $info = 'Success';
                 return true;
             } catch (rex_sql_exception $e) {
                 $error = $e->getMessage();
@@ -1897,16 +1956,14 @@ class search_it
      * Truncates the cache or deletes all data that are concerned with the given index-ids.
      *
      * @param mixed $_indexIds
-     *
-     *
      */
     public function deleteCache($_indexIds = false)
     {
         if ($_indexIds === false) {
-            // delete entire search-chache
+            // delete entire search-cache
             $delete = rex_sql::factory();
-            $delete->setQuery('TRUNCATE '. $this->tempTablePrefix . 'search_it_cacheindex_ids');
-            $delete->setQuery('TRUNCATE '. $this->tempTablePrefix . 'search_it_cache');
+            $delete->setQuery('TRUNCATE '. self::getTempTablePrefix() . 'search_it_cacheindex_ids');
+            $delete->setQuery('TRUNCATE '. self::getTempTablePrefix() . 'search_it_cache');
 
         } elseif (is_array($_indexIds) AND !empty($_indexIds)) {
             $sql = rex_sql::factory();
@@ -1915,31 +1972,31 @@ class search_it
             SELECT cache_id
             FROM %s
             WHERE index_id IN (%s)',
-                $this->tempTablePrefix . 'search_it_cacheindex_ids',
+                self::getTempTablePrefix() . 'search_it_cacheindex_ids',
                 implode(',', $_indexIds)
             );
 
-            $deleteIds = array(0);
+            $deleteIds = [0];
             foreach ($sql->getArray($query) as $cacheId) {
                 $deleteIds[] = $cacheId['cache_id'];
             }
 
             // delete from search-cache where indexed IDs exist
             $delete = rex_sql::factory();
-            $delete->setTable($this->tempTablePrefix . 'search_it_cache');
+            $delete->setTable(self::getTempTablePrefix() . 'search_it_cache');
             $delete->setWhere('id IN (' . implode(',', $deleteIds) . ')');
             $delete->delete();
 
             // delete the cache-ID and index-ID
             $delete2 = rex_sql::factory();
-            $delete2->setTable($this->tempTablePrefix . 'search_it_cacheindex_ids');
+            $delete2->setTable(self::getTempTablePrefix() . 'search_it_cacheindex_ids');
             $delete2->setWhere('cache_id IN (' . implode(',', $deleteIds) . ')');
             $delete2->delete();
 
             // delete all cached searches which had no result (because now they maybe will have)
             $delete3 = rex_sql::factory();
-            $delete3->setTable($this->tempTablePrefix . 'search_it_cache');
-            $delete3->setWhere(sprintf('id NOT IN (SELECT cache_id FROM `%s`)', $this->tempTablePrefix . 'search_it_cacheindex_ids'));
+            $delete3->setTable(self::getTempTablePrefix() . 'search_it_cache');
+            $delete3->setWhere(sprintf('id NOT IN (SELECT cache_id FROM `%s`)', self::getTempTablePrefix() . 'search_it_cacheindex_ids'));
             $delete3->delete();
         }
     }
@@ -1952,15 +2009,16 @@ class search_it
         $simWordsSQL = rex_sql::factory();
         $simWords = [];
         foreach ($_keywords as $keyword) {
-            if (!in_array(mb_strtolower($keyword['search'], 'UTF-8'), $this->blacklist) AND
-                !in_array(mb_strtolower($keyword['search'], 'UTF-8'), $this->stopwords)
+            if (!in_array(mb_strtolower($keyword['search'], 'UTF-8'), $this->blacklist) &&
+                !in_array(mb_strtolower($keyword['search'], 'UTF-8'), $this->stopwords) &&
+				!is_numeric($keyword['search'])
             ) {
                 $simWords[] = sprintf(
                     "(%s, '%s', '%s', '%s', %s)",
                     $simWordsSQL->escape($keyword['search']),
-                    ($this->similarwordsMode & SEARCH_IT_SIMILARWORDS_SOUNDEX) ? soundex($keyword['search']) : '',
-                    ($this->similarwordsMode & SEARCH_IT_SIMILARWORDS_METAPHONE) ? metaphone($keyword['search']) : '',
-                    ($this->similarwordsMode & SEARCH_IT_SIMILARWORDS_COLOGNEPHONE) ? soundex_ger($keyword['search']) : '',
+                    (($this->similarwordsMode & SEARCH_IT_SIMILARWORDS_SOUNDEX) && !is_numeric(soundex($keyword['search']))) ? soundex($keyword['search']) : '',
+                    (($this->similarwordsMode & SEARCH_IT_SIMILARWORDS_METAPHONE) && !is_numeric(metaphone($keyword['search']))) ? metaphone($keyword['search']) : '',
+                    (($this->similarwordsMode & SEARCH_IT_SIMILARWORDS_COLOGNEPHONE) && !is_numeric(soundex_ger($keyword['search']))) ? soundex_ger($keyword['search']) : '',
                     (isset($keyword['clang']) AND $keyword['clang'] !== false) ? $keyword['clang'] : '-1'
                 );
             }
@@ -1974,7 +2032,7 @@ class search_it
               VALUES
               %s
               ON DUPLICATE KEY UPDATE count = count + %d",
-                    $this->tempTablePrefix . 'search_it_keywords',
+                    self::getTempTablePrefix() . 'search_it_keywords',
                     implode(',', $simWords),
                     $_doCount ? 1 : 0
                 )
@@ -1985,7 +2043,7 @@ class search_it
     public function deleteKeywords()
     {
         $kw_sql = rex_sql::factory();
-        return $kw_sql->setQuery(sprintf('TRUNCATE TABLE `%s`', $this->tempTablePrefix . 'search_it_keywords'));
+        return $kw_sql->setQuery(sprintf('TRUNCATE TABLE `%s`', self::getTempTablePrefix() . 'search_it_keywords'));
     }
 
 
@@ -2023,7 +2081,7 @@ class search_it
             );
         }
 
-        // ask cache
+		// ask cache
         if (rex_request('search_it_test', 'string', '') == '' && $this->cache AND $this->isCached($this->searchString)) {
             $this->cachedArray['time'] = microtime(true) - $startTime;
 
@@ -2037,81 +2095,85 @@ class search_it
             return $this->cachedArray;
         }
 
-
         if ($this->similarwords) {
             $simWordsSQL = rex_sql::factory();
             $simwordQuerys = [];
             foreach ($this->searchArray as $keyword) {
-                $sounds = [];
-                if ($this->similarwordsMode & SEARCH_IT_SIMILARWORDS_SOUNDEX) {
-                    $sounds[] = "soundex = '" . soundex($keyword['search']) . "'";
-                }
+				if(!is_numeric($keyword['search'])) {
+					$sounds = [];
+					if ($this->similarwordsMode && SEARCH_IT_SIMILARWORDS_SOUNDEX && !is_numeric(soundex($keyword['search']))) {
+						$sounds[] = "soundex = '" . soundex($keyword['search']) . "'";
+					}
 
-                if ($this->similarwordsMode & SEARCH_IT_SIMILARWORDS_METAPHONE) {
-                    $sounds[] = "metaphone = '" . metaphone($keyword['search']) . "'";
-                }
+					if ($this->similarwordsMode && SEARCH_IT_SIMILARWORDS_METAPHONE && !is_numeric(metaphone($keyword['search']))) {
+						$sounds[] = "metaphone = '" . metaphone($keyword['search']) . "'";
+					}
 
-                if ($this->similarwordsMode & SEARCH_IT_SIMILARWORDS_COLOGNEPHONE) {
-                    $sounds[] = "colognephone = '" . soundex_ger($keyword['search']) . "'";
-                }
-                $simwordQuerys[] = sprintf("
-                  (SELECT
-                    GROUP_CONCAT(DISTINCT keyword SEPARATOR ' ') as keyword,
-                    %s AS typedin,
-                    SUM(count) as count
-                  FROM `%s`
-                  WHERE 1
-                    %s
-                    AND (%s))",
-                    $simWordsSQL->escape($keyword['search']),
-                    $this->tempTablePrefix . 'search_it_keywords',
-                    ($this->clang !== false) ? 'AND (clang = ' . intval($this->clang) . ' OR clang IS NULL)' : '',
-                    implode(' OR ', $sounds)
-                );
-            }
+					if ($this->similarwordsMode && SEARCH_IT_SIMILARWORDS_COLOGNEPHONE && !is_numeric(soundex_ger($keyword['search']))) {
+						$sounds[] = "colognephone = '" . soundex_ger($keyword['search']) . "'";
+					}
+					if(!empty($sounds)) {
+						$simwordQuerys[] = sprintf("
+						  (SELECT
+							GROUP_CONCAT(DISTINCT keyword SEPARATOR ' ') as keyword,
+							%s AS typedin,
+							SUM(count) as count
+						  FROM `%s`
+						  WHERE 1
+							%s
+							AND (%s))",
+							$simWordsSQL->escape($keyword['search']),
+							self::getTempTablePrefix() . 'search_it_keywords',
+							($this->clang !== false) ? 'AND (clang = ' . intval($this->clang) . ' OR clang IS NULL)' : '',
+							implode(' OR ', $sounds)
+						);
+					}
+				}
+			}
             //echo '<br><pre>'; var_dump($simwordQuerys);echo '</pre>'; // Eine SQL-Abfrage pro Suchwort
 
             // simwords
-            $simWordsSQL = rex_sql::factory();
-            foreach ($simWordsSQL->getArray(sprintf("
-                SELECT * FROM (%s) AS t
-                %s
-                ORDER BY count",
-                    implode(' UNION ', $simwordQuerys),
-                    $this->similarwordsPermanent ? '' : 'GROUP BY keyword, typedin'
-                )
-            ) as $simword) {
-                //echo '<br><pre>'; var_dump($simword);echo '</pre>';
-                $return['simwords'][$simword['typedin']] = array(
-                    'keyword' => $simword['keyword'],
-                    'typedin' => $simword['typedin'],
-                    'count' => $simword['count'],
-                );
-            }
-            /*echo '<br><pre>' .sprintf("
-            SELECT * FROM (%s) AS t
-            %s
-            ORDER BY count",
-                implode(' UNION ', $simwordQuerys),
-                $this->similarwordsPermanent ? '' : 'GROUP BY keyword, typedin'
-            ).'</pre>'; die();*/
-            $newsearch = [];
-            foreach ($this->searchArray as $keyword) {
-                if (preg_match('~\s~isu', $keyword['search'])) {
-                    $quotes = '"';
-                } else {
-                    $quotes = '';
-                }
+			if(!empty($simwordQuerys)) {
+				$simWordsSQL = rex_sql::factory();
+				foreach ($simWordsSQL->getArray(sprintf("
+					SELECT * FROM (%s) AS t
+					%s
+					ORDER BY count",
+						implode(' UNION ', $simwordQuerys),
+						$this->similarwordsPermanent ? '' : 'GROUP BY keyword, typedin'
+					)
+				) as $simword) {
+					//echo '<br><pre>'; var_dump($simword);echo '</pre>';
+					$return['simwords'][$simword['typedin']] = array(
+						'keyword' => $simword['keyword'],
+						'typedin' => $simword['typedin'],
+						'count' => $simword['count'],
+					);
+				}
+				/*echo '<br><pre>' .sprintf("
+				SELECT * FROM (%s) AS t
+				%s
+				ORDER BY count",
+					implode(' UNION ', $simwordQuerys),
+					$this->similarwordsPermanent ? '' : 'GROUP BY keyword, typedin'
+				).'</pre>'; die();*/
+				$newsearch = [];
+				foreach ($this->searchArray as $keyword) {
+					if (preg_match('~\s~isu', $keyword['search'])) {
+						$quotes = '"';
+					} else {
+						$quotes = '';
+					}
 
-                if (array_key_exists($keyword['search'], $return['simwords'])) {
-                    $newsearch[] = $quotes . $return['simwords'][$keyword['search']]['keyword'] . $quotes;
-                } else {
-                    $newsearch[] = $quotes . $keyword['search'] . $quotes;
-                }
-            }
-
-            $return['simwordsnewsearch'] = implode(' ', $newsearch);
-        }
+					if (array_key_exists($keyword['search'], $return['simwords'])) {
+						$newsearch[] = $quotes . $return['simwords'][$keyword['search']]['keyword'] . $quotes;
+					} else {
+						$newsearch[] = $quotes . $keyword['search'] . $quotes;
+					}
+				}
+	            $return['simwordsnewsearch'] = implode(' ', $newsearch);
+			}
+		}
 
         //print_r($this->searchArray);echo '<br><br>';
         if ($this->similarwordsPermanent) {
@@ -2143,9 +2205,6 @@ class search_it
         foreach ($this->searchArray as $searchword) {
             $AWhere = [];
             $similarkeywords = '';
-            if ($this->similarwords && !isset($return['simwords'][$searchword['search']])) {
-                continue;
-            }
             if (isset($return['simwords'][$searchword['search']]['keyword'])) {
                 $similarkeywords = $return['simwords'][$searchword['search']]['keyword'];
             }
@@ -2183,6 +2242,7 @@ class search_it
             }
             $A2Where[] = '(' . implode(' OR ', $AWhere) . ')';
         }
+		
         // build MATCH-String
         $match = '(' . implode(' + ', $Amatch) . ' + 1)';
 
@@ -2210,11 +2270,11 @@ class search_it
 		}
 
         if (array_key_exists('categories', $this->searchInIDs) AND count($this->searchInIDs['categories'])) {
-            $AwhereToSearch[] = "(catid IN (" . implode(',', $this->searchInIDs['categories']) . ") AND ftable = '" . $this->tablePrefix . "article')";
+            $AwhereToSearch[] = "(catid IN (" . implode(',', $this->searchInIDs['categories']) . ") AND ftable = '" . self::getTablePrefix() . "article')";
         }
 
         if (array_key_exists('filecategories', $this->searchInIDs) AND count($this->searchInIDs['filecategories'])) {
-            $AwhereToSearch[] = "(catid IN (" . implode(',', $this->searchInIDs['filecategories']) . ") AND ftable = '" . $this->tablePrefix . "media')";
+            $AwhereToSearch[] = "(catid IN (" . implode(',', $this->searchInIDs['filecategories']) . ") AND ftable = '" . self::getTablePrefix() . "media')";
         }
 
         if (array_key_exists('db_columns', $this->searchInIDs) AND count($this->searchInIDs['db_columns'])) {
@@ -2252,8 +2312,8 @@ class search_it
 
         $selectFields = [];
         if ($this->groupBy) {
-            $selectFields[] = sprintf('(SELECT SUM%s FROM `%s` summe WHERE summe.fid = r1.fid AND summe.ftable = r1.ftable) AS RELEVANCE_SEARCH_IT', $match, $this->tempTablePrefix . 'search_it_index');
-            $selectFields[] = sprintf('(SELECT COUNT(*) FROM `%s` summe WHERE summe.fid = r1.fid AND (summe.ftable IS NULL OR summe.ftable = r1.ftable) AND (summe.fcolumn IS NULL OR summe.fcolumn = r1.fcolumn) AND summe.texttype = r1.texttype) AS COUNT_SEARCH_IT', $this->tempTablePrefix . 'search_it_index');
+            $selectFields[] = sprintf('(SELECT SUM%s FROM `%s` summe WHERE summe.fid = r1.fid AND summe.ftable = r1.ftable) AS RELEVANCE_SEARCH_IT', $match, self::getTempTablePrefix() . 'search_it_index');
+            $selectFields[] = sprintf('(SELECT COUNT(*) FROM `%s` summe WHERE summe.fid = r1.fid AND (summe.ftable IS NULL OR summe.ftable = r1.ftable) AND (summe.fcolumn IS NULL OR summe.fcolumn = r1.fcolumn) AND summe.texttype = r1.texttype) AS COUNT_SEARCH_IT', self::getTempTablePrefix() . 'search_it_index');
         } else {
             $selectFields[] = $match . ' AS RELEVANCE_SEARCH_IT';
         }
@@ -2287,11 +2347,11 @@ class search_it
             ORDER BY %s
             LIMIT %d,%d',
                 implode(",\n", $selectFields),
-                $this->tempTablePrefix . 'search_it_index',
+                self::getTempTablePrefix() . 'search_it_index',
                 $where,
                 $match,
                 $match,
-                $this->tempTablePrefix . 'search_it_index',
+                self::getTempTablePrefix() . 'search_it_index',
                 ($this->clang !== false) ? 'AND (clang = ' . intval($this->clang) . ' OR clang IS NULL)' : '',
                 implode(",\n", $Aorder),
                 $this->limit[0], $this->limit[1]
@@ -2304,7 +2364,7 @@ class search_it
             ORDER BY %s
             LIMIT %d,%d',
                 implode(",\n", $selectFields),
-                $this->tempTablePrefixv . 'search_it_index',
+                self::getTempTablePrefix() . 'search_it_index',
                 $where,
                 implode(",\n", $Aorder),
                 $this->limit[0], $this->limit[1]
@@ -2314,7 +2374,6 @@ class search_it
         //echo '<pre>'.implode(",\n",$selectFields).'</pre>';
         try {
             $sqlResult = $sql->getArray($query);
-            $info = 'Success';
         } catch (rex_sql_exception $e) {
             $sqlResult = [];
             $error = $e->getMessage();
@@ -2368,7 +2427,7 @@ class search_it
                 WHERE %s
                 LIMIT %d,%d',
 
-                    $this->tempTablePrefix . 'search_it_index',
+                    self::getTempTablePrefix() . 'search_it_index',
                     $where,
                     $this->limit[0], $count
                 )
@@ -2391,7 +2450,6 @@ class search_it
         }
 
         $return['hash'] = $this->cacheHash($this->searchString);
-
 
         // no test? then store keywords and cache
         if (rex_request('search_it_test', 'string', '') == '') {

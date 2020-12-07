@@ -83,16 +83,20 @@ Fragen können auch im [REDAXO-Channel auf Slack](https://friendsofredaxo.slack.
 * Findet sich im syslog die Meldung `Warning: You should not use non-secure socket connections while connecting to "my-domain.tld"` so liegt dies daran, das die eigene Domain in den Einstellungen unter System (oder bei Verwendung von des Addons `YRewrite` in den Einstellungen dort) ohne `https://` eingetragen wurde.
 
 ## Lizenz
-MIT Lizenz, siehe [LICENSE.md](https://github.com/FriendsOfREDAXO/search_it/blob/master/LICENSE.md) 
+
+[MIT Lizenz](https://github.com/FriendsOfREDAXO/search_it/blob/master/LICENSE.md) 
 
 ## Autor
-**Friends Of REDAXO** 
+
+**Friends Of REDAXO**
 http://www.redaxo.org 
 https://github.com/FriendsOfREDAXO 
+
 **Projekt-Lead** 
 [Norbert Micheel](https://github.com/tyrant88)
 
 ## Credits
+
 Search it basiert auf: [RexSearch (Xong) für REDAXO 4](https://github.com/xong/rexsearch) 
 [Norbert Micheel](https://github.com/tyrant88/) Portierung für R5 und aktiven Entwicklung
 [Alexander Walther](https://github.com/skerbis) Dokumentation und Hilfe 

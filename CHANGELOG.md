@@ -1,7 +1,22 @@
-# Änderungen von search_it
+## Versione 6.7.3 (2020-10-13)
+- update.php now includes install.php @skerbis
+- Add index on column "hash" in table rex_tmp_search_it_cache @xong
+- Fix syslog error messages
+- avoid cascading indexing (#291), Performanceupdate für URL Addon URLs (#277), autoupdate urls from url addon 2.x (#289) thx  @TobiasKrais
+- Escape term output to redeem xss-vulnerability (#290) thx @DanielWeitenauer
+- change member variables $tablePrefix and $tempTablePrefix as static functions thx @elricco, @xong
+- markdown fixes thx @alexplus, @danspringer
 
-## Version 6.7.0 (2020-04-02)
+## Version 6.7.2 (2020-05-05)
+- Fix stats plugin 2
+
+## Version 6.7.1 (2020-05-02)
+- Fix stats plugin - kein tmp Präfix nutzen #279
+
+## Version 6.7.0 (2020-04-26)
 - URLs aus dem URL Addon (>= 2.0) können indexiert werden. @TobiasKrais
+- showTables is deprecated --> getTablesAndViews
+- Die Tabellen sind nicht automatisch im Backup enthalten (mit "tmp_"-Präfix versehen) thx @alexplus
 - bei schrittweiser Indexierung sind die Artikel in der Ausgabe verlinkt @alexplusde
 - minimale PHP Version ergänzt @staabm
 - install.sql -> install.php
@@ -242,11 +257,3 @@
   - Möglichkeit, bei der Indexierung von Artikelinhalten
     den Extension Point "OUTPUT_FILTER" aufzurufen, implementiert
     (http://forum.redaxo.de/sutra84454.html#84454)
-
-
-
-
-
-
-
-
